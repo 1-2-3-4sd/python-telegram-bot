@@ -1,0 +1,94 @@
+import logging 
+import random 
+import threading 
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton 
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, ConversationHandler, CallbackContext, \ 
+    CallbackQueryHandler 
+ 
+# Начало игры 
+START, PLAYING = range(2) 
+current_word = "" 
+used_words = set() 
+game_duration = 720  # 12 минут в секундах 
+ 
+def start(update: Update, context: CallbackContext) -> int: 
+    user = update.message.from_user 
+    update.message.reply_text(f"Привет, {user.first_name}! Давай сыграем в игру 'Города'. Я начну первым словом.") 
+    context.user_data['state'] = START 
+    context.user_data['game_timer'] = threading.Timer(game_duration, propose_draw, args=(update,)) 
+    context.user_data['game_timer'].start() 
+    return play(update, context) 
+ 
+def play(update: Update, context: CallbackContext) -> int: 
+    global current_word 
+    user_input = update.message.text.strip().lower() 
+ 
+    if context.user_data.get('state') == START: 
+        current_word = user_input 
+        used_words.add(current_word) 
+        update.message.reply_text(f"Твой ход! Назови город, начинающийся на букву '{current_word[-1]}'") 
+        context.user_data['state'] = PLAYING 
+        return PLAYING 
+ 
+    if user_input in used_words or user_input[0] != current_word[-1]: 
+        update.message.reply_text("Такой город нельзя использовать. Попробуй еще раз.") 
+        return PLAYING 
+ 
+    used_words.add(user_input) 
+    current_word = user_input 
+ 
+    return PLAYING 
+ 
+def surrender(update: Update, context: CallbackContext) -> int: 
+    update.message.reply_text("Ты сдаешься? Все правильно, игра закончена. Хорошо поиграли!") 
+    context.user_data.clear() 
+    return ConversationHandler.END 
+ 
+def propose_draw(update: Update) -> int: 
+    if context.user_data['state'] == PLAYING: 
+        keyboard = [ 
+            [InlineKeyboardButton("Да", callback_data="draw_yes"), 
+             InlineKeyboardButton("Нет", callback_data="draw_no")] 
+        ] 
+        reply_markup = InlineKeyboardMarkup(keyboard) 
+        update.message.reply_text("Я предлагаю ничью. Принимаешь?", reply_markup=reply_markup) 
+        return PLAYING 
+ 
+def draw_response(update: Update, context: CallbackContext): 
+    query = update.callback_query 
+    choice = query.data 
+ 
+    if choice == "draw_yes": 
+        query.edit_message_text("Отлично, игра закончена ничьей. Хорошо поиграли!") 
+        context.user_data.clear() 
+        return ConversationHandler.END 
+    elif choice == "draw_no": 
+        query.edit_message_text("Хорошо, продолжаем игру!") 
+        return PLAYING 
+ 
+def main(): 
+    logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO) 
+ 
+    updater = Updater(token='YOUR_BOT_TOKEN', use_context=True) 
+    dispatcher = updater.dispatcher 
+ 
+    conv_handler = ConversationHandler( 
+        entry_points=[CommandHandler('start', start)], 
+        states={ 
+            PLAYING: [ 
+                MessageHandler(Filters.text & ~Filters.command, play), 
+                CommandHandler('surrender', surrender), 
+                CommandHandler('draw', propose_draw) 
+            ], 
+        }, 
+        fallbacks=[] 
+    ) 
+ 
+    dispatcher.add_handler(conv_handler) 
+    dispatcher.add_handler(CallbackQueryHandler(draw_response)) 
+ 
+    updater.start_polling() 
+    updater.idle() 
+ 
+if name == '__main__': 
+    main()
